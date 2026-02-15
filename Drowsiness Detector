@@ -1,0 +1,124 @@
+import cv2
+import numpy as np
+import mediapipe as mp
+from scipy.spatial import distance as dist
+import winsound
+import threading
+
+# ---------------- SETTINGS ---------------- #
+EAR_THRESHOLD = 0.25
+EAR_CONSEC_FRAMES = 30
+
+frequency = 2500
+duration = 1000
+
+# ---------------- ALARM FUNCTION ---------------- #
+def sound_alarm():
+    winsound.Beep(frequency, duration)
+
+# ---------------- EAR FUNCTION ---------------- #
+def eye_aspect_ratio(eye):
+    A = dist.euclidean(eye[1], eye[5])
+    B = dist.euclidean(eye[2], eye[4])
+    C = dist.euclidean(eye[0], eye[3])
+    return (A + B) / (2.0 * C)
+
+# ---------------- MEDIAPIPE INIT ---------------- #
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(refine_landmarks=True)
+
+LEFT_EYE = [33, 160, 158, 133, 153, 144]
+RIGHT_EYE = [362, 385, 387, 263, 373, 380]
+
+# ---------------- CAMERA ---------------- #
+cap = cv2.VideoCapture(0)
+
+if not cap.isOpened():
+    print("Camera not accessible")
+    exit()
+
+counter = 0
+alarm_on = False
+
+# Mirror mode ON by default
+mirror_view = True
+
+print("Press 'q' to exit")
+print("Press 'i' to toggle mirror/invert view")
+
+# ---------------- MAIN LOOP ---------------- #
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    frame = cv2.resize(frame, (640, 480))
+
+    # Mirror toggle
+    if mirror_view:
+        frame = cv2.flip(frame, 1)
+
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(rgb)
+
+    if results.multi_face_landmarks:
+        for face_landmarks in results.multi_face_landmarks:
+            h, w = frame.shape[:2]
+
+            left_eye = []
+            right_eye = []
+
+            for idx in LEFT_EYE:
+                x = int(face_landmarks.landmark[idx].x * w)
+                y = int(face_landmarks.landmark[idx].y * h)
+                left_eye.append((x, y))
+
+            for idx in RIGHT_EYE:
+                x = int(face_landmarks.landmark[idx].x * w)
+                y = int(face_landmarks.landmark[idx].y * h)
+                right_eye.append((x, y))
+
+            leftEAR = eye_aspect_ratio(left_eye)
+            rightEAR = eye_aspect_ratio(right_eye)
+            ear = (leftEAR + rightEAR) / 2.0
+
+            cv2.polylines(frame, [np.array(left_eye)], True, (0, 255, 0), 1)
+            cv2.polylines(frame, [np.array(right_eye)], True, (0, 255, 0), 1)
+
+            if ear < EAR_THRESHOLD:
+                counter += 1
+
+                if counter >= EAR_CONSEC_FRAMES:
+                    cv2.putText(frame, "DROWSINESS DETECTED!",
+                                (10, 40),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                1,
+                                (0, 0, 255),
+                                2)
+
+                    if not alarm_on:
+                        alarm_on = True
+                        t = threading.Thread(target=sound_alarm)
+                        t.daemon = True
+                        t.start()
+            else:
+                counter = 0
+                alarm_on = False
+
+    # Display mirror mode status
+    mode_text = "Mirror: ON" if mirror_view else "Mirror: OFF"
+    cv2.putText(frame, mode_text, (10, 460),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                (255, 255, 255), 2)
+
+    cv2.imshow("MediaPipe Drowsiness Detector", frame)
+
+    key = cv2.waitKey(1) & 0xFF
+
+    if key == ord("q"):
+        break
+    elif key == ord("i"):
+        mirror_view = not mirror_view
+
+cap.release()
+cv2.destroyAllWindows
